@@ -254,3 +254,26 @@ EXTRACTION_PROJECT_SHEET: Final[str] = "Project-level main data"
 
 EXTRACTION_UNIT_LIST_SEPARATOR: Final[str] = ", "
 """Separator GEM uses inside "Units (list of IDs)". Observed 2026-09-15."""
+
+GEM_GOGPT_XLSX: Final[str] = "Global Oil and Gas Plant Tracker (GOGPT) - August 2026.xlsx"
+"""GEM Global Oil and Gas Plant Tracker: gas- and oil-FIRED POWER PLANTS, not
+upstream processing. Units sheet "Gas & Oil Units". Carries GEM Entity IDs."""
+
+GOGPT_UNITS_SHEET: Final[str] = "Gas & Oil Units"
+
+OGIM_GPKG: Final[str] = "OGIM_v2.7.gpkg"
+"""EDF Oil and Gas Infrastructure Mapping database v2.7 (Zenodo,
+doi:10.5281/zenodo.7466757), README dated 2025-03-28. 2.9 GB, gitignored;
+17 layers, EPSG:4326. COUNTRY is an uppercase UN member-state name, and a
+comma-separated list for lines/polygons spanning several countries."""
+
+MARS_TO_GEM_COUNTRY_ALIASES: Final[dict[str, tuple[str, ...]]] = {
+    "United States of America": ("United States",),
+    "Iran (Islamic Republic of)": ("Iran",),
+    "Russian Federation": ("Russia",),
+    "Syrian Arab Republic": ("Syria",),
+    "Viet Nam": ("Vietnam",),
+}
+"""MARS (UN-style) country names whose GEM spelling differs. Found by the
+verbatim comparison in slice 3c; these five cover 474 of 1,394 cases. OGIM
+uses the UN spelling, so it needs no aliases. Matching is case-insensitive."""

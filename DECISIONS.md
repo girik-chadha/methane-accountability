@@ -326,3 +326,58 @@ Viet Nam / Vietnam 25); together those are 474 cases (34%), so a country-name
 mapping is required before any join. Real thinness: Turkmenistan has 214 cases
 but only 3 extraction units with coordinates; Uzbekistan 87 cases / 18 units;
 Algeria 212 / 52. Expect the NONE confidence tier to be common there.
+
+## 2026-09-15 — Coverage go/no-go: OGIM and the plant tracker do not close the gap
+etl/coverage_check.py, counts only, no join. MARS: 1,394 unanswered cases in
+31 countries. Asset counts per case country from every snapshot in data/raw/,
+with the five documented MARS-to-GEM country aliases applied and OGIM's
+uppercase UN spellings matched case-insensitively.
+
+Sources measured:
+- OGIM v2.7 (EDF, 2.9 GB, 17 layers, all EPSG:4326): 4,537,369 wells,
+  1,858,109 pipeline features, 132,220 tank batteries, 98,047 equipment
+  points, 17,742 fields; counted with SQLite-side GROUP BY via pyogrio, never
+  loaded. README: "six continents and 152 countries" from 188 integrated public
+  datasets. But the Data_Catalog layer shows only 26 distinct source countries
+  plus 7 'VARIOUS' global datasets; wells exist for 27 countries only, 78% of
+  them in the United States. Granular facility coverage is North America,
+  Argentina, Brazil, Australia and parts of Europe; elsewhere OGIM records come
+  from the global polygon and VIIRS-flare datasets. The README also warns that
+  absence of tank batteries "most likely implies a gap in reporting rather than
+  the absence of infrastructure".
+- GEM Global Oil and Gas Plant Tracker (August 2026): gas- and oil-FIRED POWER
+  PLANTS (capacity in MW), 14,099 units at 6,300 plants, 100% coordinates, GEM
+  Entity IDs 99% filled. Not upstream infrastructure; a third null convention
+  (absent cells, no tokens).
+
+Top of the table (cases / GEM extraction with xy / OGIM facility points /
+OGIM wells / OGIM dedicated sources):
+  United States 245 / 1,887 / 17,068 / 3,550,528 / 45
+  Turkmenistan  214 /     3 /     42 /         0 /  0
+  Algeria       212 /    52 /     30 /         0 /  0
+  Iran          126 /   109 /    110 /         0 / 10
+  Venezuela      96 /   104 /    104 /    20,697 /  3
+  Uzbekistan     87 /    18 /      3 /         0 /  0
+  Kazakhstan     57 /    48 /     25 /         0 /  0
+  Syria          43 /    24 /      2 /         0 /  0
+
+Bottom line, over all 1,394 cases, using upstream point assets (GEM
+extraction units with coordinates + OGIM facility points + OGIM wells):
+  >= 10 assets in country:  98.4% of cases   (a meaningless bar)
+  >= 100 assets in country: 49.1% covered, 50.9% not
+  fewer assets than cases:  579 cases = 41.5% (Turkmenistan, Algeria,
+                            Uzbekistan, Syria, Bahrain, Jordan)
+GEM extraction alone at >= 100: 44.3%. OGIM moves that to 49.1%, almost
+entirely via Venezuela and Libya. For the countries that dominate the MARS
+backlog (Central Asia, North Africa, Middle East) no source in data/raw/ has
+national facility data; these gaps are out of scope by construction of the
+public sources, not confirmed absence of infrastructure.
+
+Partial mitigation to note for later: OGIM's VIIRS flare detections exist
+where nothing else does (Turkmenistan 52, Algeria 219, Uzbekistan 78) and 218
+cases are flare-type sources; a flare detection locates an asset but names no
+operator.
+
+DECISION PENDING (scope): whether to attribute only where coverage exists and
+report NONE honestly elsewhere, or to add a further source for the sparse
+countries. Nothing was normalised or joined.

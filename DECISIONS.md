@@ -169,3 +169,160 @@ either regime, the projection must be revisited, not the tolerance.
   parses every module under backend/app/ and fails on any import of geopandas,
   pyogrio, pyproj or fiona, so the runtime path cannot acquire a heavy
   geospatial dependency by accident.
+
+## 2026-09-15 — Infrastructure layers must arrive in EPSG:4326; never reproject silently
+etl/inspect_infra.py raises CrsError for any layer whose CRS does not identify
+as EPSG:4326, including geographic-but-not-WGS84 datums such as NAD83, and for
+a missing CRS. MARS publishes WGS84 lon/lat and geo.py assumes the WGS84
+ellipsoid, so a silent reprojection would bury a datum mismatch inside every
+attribution distance. Both GEM GeoPackages inspected today are EPSG:4326. The
+refusal is tested at the string level and against a real EPSG:3857 GeoPackage.
+
+## 2026-09-15 — GEM pipeline vertex spacing, measured (input to a pending decision)
+Slice 3b inspection of GEM-GGIT-Gas-Pipelines-2025-11.gpkg, one layer,
+4,246 features, EPSG:4326. Spacing is the WGS84 geodesic distance between
+consecutive vertices, multi-part geometries exploded first so no segment spans
+parts. 2,060,384 segments over 1,322,990 km of geometry.
+
+  p50 12.3 m   p90 749 m   p99 10,067 m   max 2,268 km   (11,001 zero-length)
+  segments > 5 km: 40,856 = 1.98% of segments but 67.7% of total length.
+
+  by GEM's own RouteAccuracy field (features / km / p50 / p99 / %length>5km):
+    very high (within meters)   137 /  166,218 /  12 m /   2.3 km / 24%
+    high                      1,286 /  654,801 /  12 m /  11.2 km / 61%
+    medium                      701 /  200,896 / 2.3 km / 134 km / 90%
+    low                       1,389 /  294,022 / 671 m / 156 km / 92%
+    no route (but has geom)      21 /    7,053
+  712 features (16.8%) are EMPTY GeometryCollections: no route at all.
+
+Two distinct problems hide in the long tail and need different remedies:
+
+1. Chord-versus-geodesic geometry. Measured error of point_to_segment_distance_m
+   against densified-geodesic truth for a segment passing 0.2-3 km from a leak,
+   worst case over |lat| <= 68.4, by vertex spacing L:
+     L:            1 km   5 km   10 km   20 km   50 km   100 km
+     raw chord:    0.65   1.33    5.34   21.4    134     534 m
+     densify 10km: 0.65   1.33    4.96    3.42   5.34    4.07 m
+     densify 5 km: 0.65   1.29    0.85    1.28   1.10    1.12 m
+     densify 2 km: 0.65   0.56    0.66    0.62   0.51    0.66 m
+   Error grows ~L^2, consistent with the geodesic sagitta L^2 tan(lat) / 8R.
+   Densifying at 5 km or finer puts every segment inside the 10 m envelope
+   (worst 1.33 m). This part is cheap and purely geometric.
+
+2. Placeholder routes. The 1,000-2,300 km single chords (Yamburg-Volga,
+   Persian Gas Pipeline, Power of Siberia 2, Trans-Sahara, Nigeria-Libya) are
+   straight lines between named endpoints, not traced routes; the real pipe may
+   be tens of km from the chord (midpoint deviations of 7-193 km). No
+   densification interval recovers a route that was never digitised. This has
+   to be handled in attribution logic, using RouteAccuracy and RouteType as
+   inputs to candidate confidence, not in geometry. Note GEM's label is
+   per-project, not per-segment: "high" accuracy routes still contain 1,101 km
+   single chords (Chelyabinsk-Petrovsk), and only 57% of "high" features have
+   geodesic geometry length within 10% of GEM's declared LengthMergedKm (35%
+   for "low").
+
+Caveat on the deviation metric: it is geodesic-midpoint to (lon,lat)-chord
+midpoint, an upper bound on the cross-track gap that includes an along-track
+term from unequal metres per degree of latitude. That term is under 2 m for
+north-south chords up to 100 km and matters only above ~250 km, where the
+chord is a placeholder anyway.
+
+DECISION PENDING: densification interval, and how RouteAccuracy / RouteType /
+Status feed candidate confidence. Nothing was normalised or joined in 3b.
+
+## 2026-09-15 — GEM schema hazards recorded for the attribution data model
+- ProjectID is not a physical pipe. Of the 712 empty-geometry features, 130 are
+  "Capacity expansion only", 14 "Included in other ProjectID" and 12
+  "Bidirectionality upgrade only": separate ProjectIDs sharing one physical
+  route with another ProjectID. A naive join would double-count owners.
+- Every attribute column in the pipelines layer is a string. GEM's null token
+  in numeric columns is "--" (LengthMergedKm 69, CapacityBcm/y 1,617 = 38%,
+  CostUSD 2,923) and in text columns an empty string (SegmentName 51%,
+  StartYear1 34%, FuelSource 69%). Pandas reports zero nulls; both must be
+  treated as missing. A capacity-based asset-scale prior is unavailable for 38%.
+- Ownership is often unknown: Parent contains "unknown" for 1,964 features
+  (46%), ParentEntityIDs is literally "unknown" for 905, Owner is "--" for 501.
+- Status: 2,975 operating, 611 proposed, 282 construction, 243 cancelled, 103
+  shelved. Non-operating pipelines cannot leak; attribution must filter or
+  down-weight on Status. LNG terminals likewise: only 376 of 1,198 units
+  operating.
+- LNG terminals: clean, typed, no empties; Latitude/Longitude columns agree
+  with geometry to the millimetre; 1,198 units belong to 807 terminals
+  (ProjectID repeats per unit); Accuracy is "exact" 557 / "approximate" 641;
+  "Owner GEM Entity ID" and "Parent GEM Entity ID" join to the ownership
+  tracker's All Entities.Entity ID; ParentEntityIDs in the pipelines layer is
+  the same key.
+- Ownership tracker: read by streaming the xlsx as a zip (sharedStrings.xml is
+  135 MB uncompressed; nothing was loaded). "Gas Pipeline Ownership" carries
+  ProjectID, the pipelines join key. Declared sheet extents are unreliable:
+  five different sheets all claim A1:N161862.
+- Extraction tracker "Field-level main data" carries Latitude/Longitude, a WKT
+  field outline, Operator/Owner(s)/Parent(s) and "Location accuracy". MARS
+  source_type values are dominated by fields and facilities, not pipelines, so
+  this is likely a primary attribution source and has not been inspected in
+  depth yet.
+
+## 2026-09-15 — The extraction tracker is the primary attribution source; inspected
+MARS cases are 100% oil and gas and, by source_type, dominated by point-like
+production and processing assets; pipelines are ~23%. GEM's Global Oil and Gas
+Extraction Tracker (March 2026) is therefore the primary infrastructure input.
+Read with etl/xlsx_stream.py (standard library, every cell as written; no
+openpyxl added: the file is 5 MB but the same reader serves the 135 MB
+ownership workbook and keeps GEM's literal null tokens intact).
+
+"Field-level main data": 7,673 units x 27 columns. "Project-level main data":
+359 projects x 28 columns. Only 501 units are linked to any project and 459 of
+the 960 unit IDs that projects list do not exist in the field sheet, so the
+project level is not a reliable roll-up.
+
+Null convention in THIS file: every cell is present and missing values are
+the empty string "" only. No "--" anywhere, unlike the pipelines GeoPackage,
+and "unknown" is a real category in Onshore/Offshore (443). Years are stored
+as "2024.0". Each GEM file's null convention must be discovered, not assumed.
+
+Coordinates: 7,055 of 7,673 units (91.9%) have numeric lat/lon, none out of
+range or at (0,0); 618 have none. Location accuracy is exact 6,035 /
+approximate 1,021 / "" 617 and lines up with coordinate presence. It exists on
+both sheets and is filled independently per row (236 same vs 265 different
+between a project and its units). 18 coordinate pairs are shared by 5 or more
+units (117 units), e.g. 14 South Pars phases on one point and 13 Qatar North
+Field units on another: distance alone cannot separate assets on a shared
+placeholder point.
+
+Outlines ("Field outline (WKT)"): 1,110 rows (14.5%). Of these, 28 are
+unparseable because they are exactly 32,767 characters, Excel's cell limit,
+so GEM's polygon was truncated on export and is unrecoverable from this file;
+1 is MULTIPOLYGON EMPTY; and 110, all in Poland, are stored in a projected CRS
+in metres (bounds ~324k-454k E, 416k-853k N, consistent with EPSG:2180) inside
+the nominally WGS84 column, while their Latitude/Longitude cells are fine.
+etl/inspect_extraction.py flags all three and excludes them from statistics.
+The remaining 971: area p50 33 km2, p90 209 km2, max 1,356 km2; bounding-box
+diagonal p50 12 km, and 59% are wider than the 10 km projection envelope. The
+unit's own point lies inside its outline for 871 of 951; for the 80 outside,
+the gap is p50 1.5 km, max 844 km. Consequence for attribution: a field is a
+region, not a point, and distance to it has to be to the nearest edge; a
+single local frame about the leak does not cover most outlines.
+
+Ownership: Operator filled 83% (plain names); Owner(s) and Parent(s) 51%, as
+"Name [share%]" lists separated by "; ". Owner shares are written "[100%]" and
+Parent shares "[100.0%]" (100% of Parent shares carry decimals, 0% of Owner),
+so the two columns need separate parsing. 2,556 units have an Operator but no
+Owner/Parent.
+
+There is NO GEM Entity ID in either sheet, and the ownership workbook's Asset
+Ownership sheet (50,460 rows) contains zero extraction Unit IDs or Project IDs:
+its asset types are coal, gas and bioenergy plants, pipelines, mines, steel
+and cement only. Owner entities for extraction units can only be reached by
+matching Owner/Parent/Operator TEXT against the ownership workbook's All
+Entities names, which is lossy normalisation work for a later slice. Note the
+"Oil & Gas Plant" asset type (14,621 rows, L-prefixed IDs) does carry entity
+IDs and likely covers gas processing plants; that tracker is not in data/raw/.
+
+Coverage against the 1,394 MARS cases, country names compared verbatim: five
+MARS names have zero rows only because GEM spells them differently (United
+States of America / United States 2,009 rows; Iran (Islamic Republic of) /
+Iran 114; Russian Federation / Russia 332; Syrian Arab Republic / Syria 24;
+Viet Nam / Vietnam 25); together those are 474 cases (34%), so a country-name
+mapping is required before any join. Real thinness: Turkmenistan has 214 cases
+but only 3 extraction units with coordinates; Uzbekistan 87 cases / 18 units;
+Algeria 212 / 52. Expect the NONE confidence tier to be common there.

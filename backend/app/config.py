@@ -200,3 +200,57 @@ GEO_ERROR_TOLERANCE_M: Final[float] = 10.0
 Headroom over the measured 8.28 m worst case. A failure against this tolerance
 means the projection changed, not that the tolerance was too tight.
 """
+
+
+# =============================================================================
+# GLOBAL ENERGY MONITOR — infrastructure snapshots for attribution
+# =============================================================================
+#
+# Source: Global Energy Monitor, Global Gas Infrastructure Tracker (GGIT) and
+# Global Energy Ownership Tracker, downloaded 2026-09-15 via GEM's form-gated
+# download page and committed under data/raw/ as immutable snapshots. Licence
+# CC BY 4.0: GEM must be attributed wherever this data is displayed.
+
+GEM_ATTRIBUTION: Final[str] = "Global Energy Monitor"
+GEM_LICENCE: Final[str] = "CC BY 4.0"
+
+GEM_GAS_PIPELINES_GPKG: Final[str] = "GEM-GGIT-Gas-Pipelines-2025-11.gpkg"
+"""GGIT gas pipelines, November 2025 release. Linestring geometries."""
+
+GEM_LNG_TERMINALS_GPKG: Final[str] = "GEM-GGIT-LNG-Terminals-2025-09.gpkg"
+"""GGIT LNG terminals, September 2025 release. Point geometries."""
+
+GEM_OWNERSHIP_XLSX: Final[str] = "Global-Energy-Ownership-Tracker-August-2026-V2.xlsx"
+"""Global Energy Ownership Tracker, August 2026 V2. Resolves assets to parents."""
+
+GEM_EXTRACTION_XLSX: Final[str] = "Global-Oil-and-Gas-Extraction-Tracker-March-2026.xlsx"
+"""Global Oil and Gas Extraction Tracker, March 2026 release."""
+
+INFRA_REQUIRED_EPSG: Final[int] = 4326
+"""Every infrastructure layer must arrive in EPSG:4326 (WGS84 lon/lat).
+
+This is the datum MARS coordinates are published in and the ellipsoid geo.py
+assumes. A layer in any other CRS is refused, never silently reprojected,
+because a silent reprojection would hide a datum mismatch inside the
+attribution distances.
+"""
+
+INFRA_VERTEX_SPACING_FLAG_M: Final[float] = 5_000.0
+"""Consecutive-vertex spacing above which a pipeline segment is flagged, metres.
+
+Chosen for the slice-3b inspection as half of GEO_VALIDATED_SEPARATION_M: a
+straight chord between vertices this far apart is a questionable stand-in for
+the pipeline's true path, and its endpoints can lie outside the validated
+projection envelope even when the segment passes close to a leak. This is a
+reporting threshold, not a densification interval; that decision is pending
+and will be recorded in DECISIONS.md when made.
+"""
+
+EXTRACTION_FIELD_SHEET: Final[str] = "Field-level main data"
+"""Sheet of GEM_EXTRACTION_XLSX with one row per field/unit (Unit ID)."""
+
+EXTRACTION_PROJECT_SHEET: Final[str] = "Project-level main data"
+"""Sheet of GEM_EXTRACTION_XLSX with one row per project, listing its units."""
+
+EXTRACTION_UNIT_LIST_SEPARATOR: Final[str] = ", "
+"""Separator GEM uses inside "Units (list of IDs)". Observed 2026-09-15."""

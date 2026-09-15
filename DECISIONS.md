@@ -103,3 +103,69 @@ diffed directly against the CSVs. Interpretation happens downstream where it is
 testable. The db is gitignored and fully reproducible from the raw snapshot.
 Tests assert the no-conversion property by comparing stored values against the
 CSV, and assert that no `_kg` or `_tonne` column has crept in.
+
+## 2026-09-15 — Local projection uses WGS84 radii of curvature, not a sphere
+CLAUDE.md specifies a local equirectangular projection about the leak point.
+The open question was the scale factor. Measured against pyproj.Geod (WGS84) as
+ground truth, worst-case error over separations up to 10 km:
+
+  sphere at IUGG mean radius, cos(lat0)      56.1 m   (|lat| <= 70)
+  WGS84 local radii of curvature at lat0      8.3 m   (|lat| <= 70)
+
+We use the second:
+  x_m = N(lat0) * cos(lat0) * dlon
+  y_m = M(lat0) * dlat
+with M the meridional and N the prime vertical radius of curvature at the
+origin latitude. Both are constants once the origin is fixed, so the map stays
+affine and planar point-to-segment geometry remains valid.
+
+The sphere's 56 m is a systematic scale error, not noise: a single mean radius
+differs from the local radius of curvature by up to ~0.5%, which at the equator
+is 0.57% along a meridian. Attribution radii in this project derive from
+satellite geolocation uncertainty and are of the order of hundreds of metres, so
+a 56 m systematic bias would be a material fraction of the matching radius and
+would bias every candidate set in the same direction. 8.3 m is not material at
+that scale.
+
+This is a deliberate deviation from the slice instruction to put an
+IUGG-cited Earth radius in config.py and use it. EARTH_MEAN_RADIUS_M is still in
+config.py, cited to IUGG, but explicitly marked as not used, with the
+measurement above recorded next to it, so that nobody reintroduces the sphere
+without seeing the cost. The constants actually used are the WGS84 defining
+parameters, cited to NGA.STND.0036_1.0.0_WGS84.
+
+## 2026-09-15 — Measured worst-case geometry error, and the validated envelope
+Envelope: |lat| <= 70 degrees, separations <= 10 km. It covers the whole MARS
+snapshot with margin (observed latitude range -50.7 to +68.4) and matches the
+sub-10 km matching radii that make a planar approximation admissible at all.
+
+Inside it, validated against pyproj.Geod over a grid of latitude, azimuth and
+separation:
+  point_distance_m              worst 8.28 m  (0.083%), at lat -70, 10 km
+  point_to_segment_distance_m   worst 7.89 m, at lat 70
+Assertion tolerance is 10 m (GEO_ERROR_TOLERANCE_M), leaving headroom over the
+measured worst case. The measured figure is pinned in config.py as
+GEO_WORST_CASE_ERROR_M and asserted to 0.1 m, so a change in accuracy shows up
+as a diff in a cited constant rather than as a silently loosened test.
+
+Behaviour outside the envelope is documented by tests rather than fixed, since
+the functions still return an answer. For a 10 km separation the worst error is
+17.1 m at 80 degrees, 34.7 m at 85, and 181.7 m at 89. At mid-latitude it is
+18.8 m at 25 km, 75.4 m at 50 km and 303.3 m at 100 km. If a later slice needs
+either regime, the projection must be revisited, not the tolerance.
+
+## 2026-09-15 — Known geometry limitations, asserted rather than hidden
+- Antimeridian IS handled: longitude differences are wrapped to (-180, 180], so
+  179.99E to 179.99W reads as 0.02 degrees. Tested against the geodesic.
+- At a pole the projection is degenerate: cos(lat0) = 0 collapses every
+  longitude to x = 0 and longitude information is lost. Not reachable from MARS
+  data, which stops at 68.4 degrees, but asserted so the limit is explicit.
+- point_distance_m is slightly ASYMMETRIC, because the projection origin is its
+  first argument. Worst measured asymmetry is 16.5 m over 10 km at |lat| 70.
+  This is inherent to projecting about one endpoint and is acceptable because
+  the project always has a natural origin, the leak. Callers must not rely on
+  d(a, b) == d(b, a); a test pins the asymmetry so it cannot grow unnoticed.
+- pyproj appears only in backend/tests/, never in backend/app/. A test statically
+  parses every module under backend/app/ and fails on any import of geopandas,
+  pyogrio, pyproj or fiona, so the runtime path cannot acquire a heavy
+  geospatial dependency by accident.

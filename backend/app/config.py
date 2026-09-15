@@ -127,3 +127,76 @@ MARS_DB_PATH: Final[Path] = PROCESSED_DIR / "mars.db"
 
 SOURCES_TABLE: Final[str] = "sources"
 PLUMES_TABLE: Final[str] = "plumes"
+
+
+# =============================================================================
+# GEODESY — reference ellipsoid and the validated envelope of backend/app/geo.py
+# =============================================================================
+#
+# geo.py uses a local equirectangular projection about the leak point. Its scale
+# factors are the LOCAL RADII OF CURVATURE of the WGS84 ellipsoid at the origin
+# latitude, not a single global Earth radius. See DECISIONS.md, 2026-09-15, for
+# the measurement behind that choice.
+
+WGS84_SEMI_MAJOR_AXIS_M: Final[float] = 6378137.0
+"""WGS84 semi-major axis a, in metres. Defining constant.
+
+Source: NGA.STND.0036_1.0.0_WGS84, "Department of Defense World Geodetic System
+1984", version 1.0.0, 2014, table 3.1. This is the ellipsoid pyproj's
+Geod(ellps="WGS84") uses, so our tests compare like with like.
+"""
+
+WGS84_INVERSE_FLATTENING: Final[float] = 298.257223563
+"""WGS84 inverse flattening 1/f. Defining constant. Source: as above."""
+
+WGS84_FLATTENING: Final[float] = 1.0 / WGS84_INVERSE_FLATTENING
+"""Derived from the defining constant above, not independently sourced."""
+
+WGS84_ECCENTRICITY_SQUARED: Final[float] = WGS84_FLATTENING * (
+    2.0 - WGS84_FLATTENING
+)
+"""First eccentricity squared, e^2 = f(2 - f). Derived, standard identity."""
+
+EARTH_MEAN_RADIUS_M: Final[float] = 6371008.771
+"""IUGG mean radius R1 = (2a + b) / 3, in metres.
+
+Source: International Union of Geodesy and Geophysics, as reported in the IUGG
+geodetic reference system; the same value appears in NGA.STND.0036_1.0.0_WGS84.
+
+DELIBERATELY NOT USED BY geo.py. It is recorded here as a signpost: treating
+the Earth as a sphere of this radius was measured at up to 56 m of error over a
+10 km separation, against 8.3 m for the ellipsoidal form we use, because a
+single mean radius carries a systematic scale error of ~0.5% against the local
+radius of curvature. Do not reintroduce it into the projection. See DECISIONS.md.
+"""
+
+GEO_VALIDATED_LATITUDE_LIMIT_DEG: Final[float] = 70.0
+"""Absolute latitude up to which geo.py's accuracy is tested and asserted.
+
+Chosen because the 2026-09-15 MARS snapshot spans -50.7 to +68.4 degrees, so
+this envelope covers every row in the dataset with margin. The projection still
+returns an answer outside it, with degrading accuracy; it does not raise.
+"""
+
+GEO_VALIDATED_SEPARATION_M: Final[float] = 10_000.0
+"""Separation up to which geo.py's accuracy is tested and asserted, in metres.
+
+CLAUDE.md fixes attribution matching radii below about 10 km, which is what
+makes the planar approximation admissible in the first place.
+"""
+
+GEO_WORST_CASE_ERROR_M: Final[float] = 8.28
+"""Measured worst-case error against pyproj.Geod inside the envelope, in metres.
+
+Measured by backend/tests/test_geo.py over a grid of latitudes, azimuths and
+separations. Equivalently 0.083% of the separation. Recorded so that a future
+change which degrades accuracy is visible as a diff here, not just a test
+tweak.
+"""
+
+GEO_ERROR_TOLERANCE_M: Final[float] = 10.0
+"""Assertion tolerance inside the envelope, in metres.
+
+Headroom over the measured 8.28 m worst case. A failure against this tolerance
+means the projection changed, not that the tolerance was too tight.
+"""

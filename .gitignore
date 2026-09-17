@@ -5,4 +5,5 @@ __pycache__/
 .env
 node_modules/
 .next/
-data/processed/*.parquetdata/raw/OGIM_v2.7.gpkg
+data/processed/*.parquet
+data/raw/OGIM_v2.7.gpkg

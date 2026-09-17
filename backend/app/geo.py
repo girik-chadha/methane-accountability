@@ -177,3 +177,41 @@ def point_to_segment_distance_m(p: LatLon, a: LatLon, b: LatLon) -> float:
     nearest_x_m = ax_m + t * seg_x_m
     nearest_y_m = ay_m + t * seg_y_m
     return math.hypot(nearest_x_m, nearest_y_m)
+
+
+def offset_latlon(
+    lat0: float, lon0: float, dx_m: float, dy_m: float
+) -> tuple[float, float]:
+    """Move (lat0, lon0) by dx_m east and dy_m north; return (lat, lon).
+
+    The exact inverse of to_local_xy about the same origin, using the same
+    local radii of curvature, so to_local_xy(*offset_latlon(...), lat0, lon0)
+    returns (dx_m, dy_m) to floating-point precision. Accuracy is that of the
+    projection itself: intended for offsets inside the validated envelope.
+    Longitude is wrapped back into (-180, 180].
+    """
+    _check_latitude(lat0, "lat0")
+    lat0_rad = math.radians(lat0)
+    lat = lat0 + math.degrees(dy_m / meridional_radius_m(lat0))
+    lon = lon0 + math.degrees(dx_m / (prime_vertical_radius_m(lat0) * math.cos(lat0_rad)))
+    return lat, _wrapped_longitude_delta_deg(lon, 0.0)
+
+
+def bbox_for_radius_m(
+    lat0: float, lon0: float, radius_m: float
+) -> tuple[float, float, float, float]:
+    """Lon/lat bounding box (minlon, minlat, maxlon, maxlat) of the disc of
+    `radius_m` about (lat0, lon0), for indexing geometries stored in degrees.
+
+    Built from offset_latlon at the four cardinal points, so it inherits the
+    projection's accuracy and is exact in the sense that every point within
+    radius_m in the local plane lies inside it. Callers must still measure the
+    true distance to whatever the box returns.
+    """
+    if radius_m < 0.0:
+        raise ValueError(f"radius_m must be non-negative, got {radius_m!r}")
+    _, min_lon = offset_latlon(lat0, lon0, -radius_m, 0.0)
+    _, max_lon = offset_latlon(lat0, lon0, radius_m, 0.0)
+    min_lat, _ = offset_latlon(lat0, lon0, 0.0, -radius_m)
+    max_lat, _ = offset_latlon(lat0, lon0, 0.0, radius_m)
+    return min_lon, min_lat, max_lon, max_lat

@@ -31,7 +31,9 @@ from backend.app.config import (
     WGS84_SEMI_MAJOR_AXIS_M,
 )
 from backend.app.geo import (
+    bbox_for_radius_m,
     meridional_radius_m,
+    offset_latlon,
     point_distance_m,
     point_to_segment_distance_m,
     prime_vertical_radius_m,
@@ -467,3 +469,55 @@ def test_runtime_path_does_not_import_geopandas_or_pyproj() -> None:
                 if name.split(".")[0] in forbidden:
                     offenders.append(f"{source_file.name}:{node.lineno} {name}")
     assert not offenders, f"forbidden imports in backend/app/: {offenders}"
+
+
+# --- offset_latlon / bbox_for_radius_m ---------------------------------------
+
+
+def test_offset_latlon_is_the_exact_inverse_of_to_local_xy() -> None:
+    for lat0, lon0 in ((0.0, 0.0), (31.87393, 6.20307), (-50.746, -70.0), (67.706, 30.0)):
+        for dx, dy in ((1000.0, 0.0), (0.0, -2500.0), (-3000.0, 4000.0), (9000.0, 9000.0)):
+            lat, lon = offset_latlon(lat0, lon0, dx, dy)
+            x, y = to_local_xy(lat, lon, lat0, lon0)
+            assert x == pytest.approx(dx, abs=1e-6) and y == pytest.approx(dy, abs=1e-6)
+
+
+def test_offset_latlon_hand_checked_at_the_equator() -> None:
+    """1105.742758 m north at the equator is exactly 0.01 degrees (geo.py golden)."""
+    lat, lon = offset_latlon(0.0, 0.0, 0.0, 1105.742758)
+    assert lat == pytest.approx(0.01, abs=1e-9) and lon == pytest.approx(0.0, abs=1e-12)
+    lat, lon = offset_latlon(0.0, 0.0, 5565.974540, 0.0)
+    assert lon == pytest.approx(0.05, abs=1e-9) and lat == pytest.approx(0.0, abs=1e-12)
+
+
+def test_offset_latlon_matches_geodesic_within_tolerance() -> None:
+    for lat0 in (0.0, 45.0, 68.4, -33.3):
+        for dx, dy in ((5000.0, 0.0), (0.0, 5000.0), (7071.0, 7071.0), (-3000.0, -9000.0)):
+            lat, lon = offset_latlon(lat0, 10.0, dx, dy)
+            truth = geodesic_distance_m(lat0, 10.0, lat, lon)
+            assert abs(truth - math.hypot(dx, dy)) < GEO_ERROR_TOLERANCE_M
+
+
+def test_offset_latlon_wraps_across_the_antimeridian() -> None:
+    lat, lon = offset_latlon(0.0, 179.99, 2226.389816, 0.0)
+    assert lon == pytest.approx(-179.99, abs=1e-9) and lat == pytest.approx(0.0, abs=1e-12)
+
+
+def test_bbox_for_radius_contains_every_point_of_the_disc() -> None:
+    lat0, lon0, radius = 31.87393, 6.20307, 5_000.0
+    min_lon, min_lat, max_lon, max_lat = bbox_for_radius_m(lat0, lon0, radius)
+    for azimuth in range(0, 360, 10):
+        lat, lon = _offset(lat0, lon0, float(azimuth), radius * 0.999)
+        assert min_lat <= lat <= max_lat and min_lon <= lon <= max_lon, azimuth
+    assert min_lat < lat0 < max_lat and min_lon < lon0 < max_lon
+
+
+def test_bbox_for_radius_hand_checked_at_the_equator() -> None:
+    min_lon, min_lat, max_lon, max_lat = bbox_for_radius_m(0.0, 0.0, 5565.974540)
+    assert (min_lon, max_lon) == pytest.approx((-0.05, 0.05), abs=1e-9)
+    assert (min_lat, max_lat) == pytest.approx((-0.0503370, 0.0503370), abs=1e-7)  # 5565.974540 / M(0) = 0.0503370 deg
+
+
+def test_bbox_for_radius_rejects_negative_radius() -> None:
+    with pytest.raises(ValueError):
+        bbox_for_radius_m(0.0, 0.0, -1.0)

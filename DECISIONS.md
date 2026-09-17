@@ -381,3 +381,424 @@ operator.
 DECISION PENDING (scope): whether to attribute only where coverage exists and
 report NONE honestly elsewhere, or to add a further source for the sparse
 countries. Nothing was normalised or joined.
+
+## 2026-09-15 — Asset table (slice 4A): what is in data/processed/assets.parquet and why
+etl/build_assets.py, 4,756,915 assets, WKB geometry, gitignored (296 MB,
+rebuilt from committed snapshots in ~2 minutes).
+- Pipelines are densified along the WGS84 geodesic to at most 2 km between
+  vertices (PIPELINE_DENSIFY_MAX_SPACING_M). Measured basis: at 2 km the worst
+  chord-versus-geodesic error is 0.51-0.66 m against the 10 m tolerance.
+  2,571 routed pipelines with a usable status, 2.16 M vertices.
+- Usable-status filters are GEM's own vocabularies (config): pipelines
+  operating/idle/mothballed/mixed; LNG operating/idled/mothballed; extraction
+  operating/mothballed/in-development/UGS/unrecorded. Proposed, cancelled,
+  shelved, retired, abandoned assets cannot hold gas today. OGIM keeps
+  everything except OGIM_STATUS = PROPOSED; abandoned wells stay because they
+  are a documented methane source class. 963 routed pipelines, 795 LNG units
+  and 504 extraction units were dropped on status.
+- The 28 truncated, 110 projected-CRS and 1 empty outlines are excluded by
+  the same classification as the 3c inspection; 917 outlines remain, each
+  carrying physical_id = its unit's point asset so the pair collapses.
+- Pipeline dedupe: the three routed "capacity expansion / included in other
+  ProjectID / bidirectionality" features overlap their named parent by only
+  0.2-3.6% of their length (measured with a ~100 m buffer), so they are
+  distinct routes and are KEPT with route_type carried. The real duplicates
+  are 201 routed features in 88 groups with byte-identical geometry (parallel
+  lines I/II, phases); those collapse through placeholder_group.
+- placeholder_group = identical geometry across ALL sources (sha1 of WKB):
+  411,658 assets in 166,726 groups, largest 273. OGIM equipment records share
+  their facility's coordinate, which is exactly the collapse wanted.
+- route_fidelity (pipelines) = geodesic length / declared LengthMergedKm:
+  p10 0.64, p50 0.98, p90 1.37.
+- A named party means operator OR parent OR owner. GEM pipelines have no
+  operator column, only Owner/Parent, so "operator or parent" alone would
+  have hidden 501 owners. 85.4% of assets name someone.
+- No GEM Entity IDs are carried: the extraction tracker has none and the
+  ownership workbook does not cover extraction assets (slice 3c).
+
+## 2026-09-15 — Search radius derivation, and the one number that is an assumption
+radius = SEARCH_RADIUS_PIXELS x min resolution over the source's detecting
+satellites, capped at the 10 km validated projection envelope (cap reported).
+Resolutions are per instrument, keyed by MARS's exact satellite strings.
+NONE could be sourced from UNEP: the data dictionary and methodology page
+list instruments without resolutions, the bundled PDF yields no text, and the
+IEA/IMEO guidance's "pixel size of approximately [N] metres" has undecodable
+digits. Each value is therefore the operating agency's published GSD for the
+bands used (ESA 20 m Sentinel-2 SWIR; USGS 30 m Landsat SWIR; ASI 30 m
+PRISMA; DLR 30 m EnMAP; NASA JPL 60 m EMIT; ESA 7 km TROPOMI; ESA 500 m
+Sentinel-3 SLSTR; NOAA 750 m VIIRS M-bands; Planet 30 m Tanager). GOES is
+deliberately unsourced and raises; it appears on no unanswered case.
+
+SEARCH_RADIUS_PIXELS = 3 is an ASSUMPTION, flagged for ratification: source
+pixel plus one pixel of geolocation error plus one of analyst placement. It
+is the only unsourced number in the attribution path, and the batch summary
+prints a sensitivity line at 2x and 5x so its effect is visible.
+
+## 2026-09-15 — Wind back-projection is built, tested, and applied with a measured offset of 0 m
+The MARS data dictionary defines a plume row's lat/lon as "coordinate of the
+source location", and all 22,900 plume rows with wind carry coordinates
+byte-identical to their source's. The published point is UNEP's origin
+estimate, not a plume centroid, so back-projecting it upwind would move the
+search away from that estimate. MARS_UPWIND_OFFSET_M is therefore 0.0, with
+the measurement as its citation. The mechanism (search_centre) is kept and
+tested against a known wind vector for any dataset that does publish
+centroids, and every result records which path was taken. This means the
+"wind-corrected versus symmetric" split for MARS is 0% / 100%, by measurement.
+
+## 2026-09-15 — Distances: the leak is always the origin; clipping is a guard, not a correction
+distance_to_geometry_m projects about the leak only. A test pins the
+convention by showing the flipped argument order gives a different number
+(up to 16.5 m over 10 km at |lat| 70). Lines and polygon BOUNDARIES are
+clipped to the search window before any vertex is projected; containment is
+tested on the unclipped polygon. Measured and recorded so nobody over-claims
+it: because the projection is affine in (lon, lat), a straight lon/lat edge
+stays straight in the plane, so the distance to a long chord is identical
+(to the millimetre) with or without clipping. Clipping guarantees that no
+vertex outside the envelope is ever projected, and avoids projecting
+thousands of vertices of a 60 km outline per candidate; it does not change
+the answer for straight edges. Ordering inside the radius is
+(kind compatibility, route traced, distance, scale): inside the localisation
+radius every position is equally plausible, so an ordinal prior needs no
+numeric weight and none was invented.
+
+## 2026-09-15 — First attribution run over the 1,394 unanswered cases (slice 4B)
+backend/app/attribution.py over 4,756,915 assets; loads and runs in ~10 s.
+  OPERATOR_NAMED   217  (15.6%)
+  ASSET_ONLY       103  ( 7.4%)   mostly VIIRS flare detections: 52 of the
+                                  218 flare-type cases resolve to a flare
+                                  that names nobody
+  UNMAPPED       1,074  (77.0%)
+Search: radius min 60 m, p50 90 m, max 10 km (one TROPOMI-only case capped);
+100% symmetric about UNEP's published source location (offset 0, measured);
+14 cases have no wind on any plume. Mapped cases: median candidate set 1,
+p90 4, max 111 (a gas-storage field of one operator's wells). Ambiguity:
+189 none, 124 competing, 7 placeholder groups.
+
+Per country the result follows the coverage check exactly: United States
+105 named / 13 asset-only / 127 unmapped; Turkmenistan 5 / 1 / 208; Algeria
+3 / 13 / 196; Uzbekistan 2 / 4 / 81. Per source type, "Gas disposal
+facility" is 254/266 unmapped and "Transmission Pipelines" 163/200, while
+"Pipeline valve" is 32/48 named.
+
+Radius sensitivity: cases with any candidate at 1x / 2x / 5x the derived
+radius: 23.0% / 32.9% / 45.1%. So the three-pixel radius is binding for
+roughly a fifth of cases, and coverage is binding for the rest: even at 5x
+(median 450 m) 55% of cases find nothing. Two things this points at, both
+left for the next decision rather than tuned here:
+1. Asset REPRESENTATION error is not in the radius. A GEM field point stands
+   for an outline whose median diagonal is 12 km; a "medium"-accuracy GEM
+   route can sit hundreds of metres from the pipe. The radius currently
+   models only the plume's localisation, so a correctly located leak at a
+   field's edge is UNMAPPED at 90 m.
+2. In the sparse countries no radius helps; those cases are UNMAPPED because
+   no public source has the assets (slice 3d).
+The compatibility prior never decides a tier; it only orders candidates
+inside the radius. GOES remains unsourced; no case needed it.
+
+## 2026-09-15 — Uncertainty budget (slice 4D): per-pair thresholds, and which sigmas are measured
+The per-leak radius modelled only plume localisation. It is replaced by a
+per-PAIR match threshold sqrt(plume_sigma^2 + asset_sigma^2), capped at the
+10 km projection envelope. plume_sigma is unchanged (SEARCH_RADIUS_PIXELS x
+resolution). asset_sigma is per asset, stored in assets.parquet as sigma_m
+with a sigma_basis string, and the STRtree window is sized by the largest
+threshold any asset could have so imprecise assets further away are still
+examined. Ordering inside the thresholds stays by raw distance: an imprecise
+asset must not outrank a precise one merely for being imprecise.
+
+MEASURED from our own data
+- extraction unit WITH an outline: sigma 0 for the polygon (distance to the
+  nearest edge already carries the extent) and 0 for the unit's point (the
+  polygon represents it; the pair collapses on physical_id).
+- extraction unit WITHOUT an outline: the equivalent-circle radius
+  sqrt(area/pi) of the 917 usable outlines, p50, split by GEM Location
+  accuracy: exact 3,317 m (n=879), approximate 4,844 m (n=20, weak). All
+  percentiles (p25 1,901 / p50 3,295 / p75 5,190 / p90 8,167 m) are written
+  by the build to data/processed/assets_sigma.json so the sensitivity run
+  never copies a number by hand. Why p50: sigma is a 1-sigma scale, not a
+  bound; a uniform disc of radius r has RMS point-to-centre distance 0.71 r,
+  so the median radius is already conservative for the median field. Caveat:
+  outlined units skew offshore (49% vs 21% of point-only units), so the
+  measured sigma may overstate typical point-only extent.
+
+SOURCED
+- VIIRS flare detections: 750 m, the M-band pixel (NOAA VIIRS specification,
+  the same citation as SATELLITE_RESOLUTION_M).
+
+ASSUMED (every one scaled x0.5 and x2 in the sensitivity table)
+- GEM pipelines by RouteAccuracy: very high (within meters) 10 m; high 100 m;
+  medium 500 m; low 2,000 m; "no route" with geometry 2,000 m. GEM defines
+  only the first class in metres; the rest are a decade scale. Supporting
+  evidence, route_fidelity within +/-10% by class: very high 70%, high 59%,
+  medium 43%, low 35% (p10-p90 fidelity: very high 0.85-1.20, high
+  0.75-1.32, medium 0.67-1.46, low 0.57-1.40). That orders the classes as
+  assumed but does not fix their metres, and placeholder chords tens of km
+  off are beyond any sigma.
+- GEM LNG terminals by Accuracy: exact 500 m (a site is several hundred
+  metres across and a leak can be anywhere on it), approximate 2,000 m.
+- OGIM, one value for the whole source: 100 m. The README states no
+  positional precision; records are mostly government registry coordinates.
+
+## 2026-09-15 — Uncertainty budget results (slice 4D); data layer frozen
+Scenario table over the 1,394 cases (named / asset-only / unmapped; candidate
+set p50 / p90 over mapped cases; mapped cases with 2+ distinct named parties):
+  4B plume sigma only              217 / 103 / 1,074   set 1 / 4    parties2+  45
+  4D default (plume + asset sigma) 356 / 323 /   715   set 1 / 4    parties2+ 103
+  assumed sigmas x0.5              329 / 321 /   744   set 1 / 4               83
+  assumed sigmas x2                409 / 316 /   669   set 1 / 5              152
+  extraction sigma = outline p25   294 / 334 /   766   set 1 / 4               81
+  extraction sigma = outline p75   406 / 320 /   668   set 1 / 4              139
+  extraction sigma = outline p90   464 / 308 /   622   set 2 / 5              197
+  plume sigma x2                   397 / 319 /   678   set 2 / 5              153
+  plume sigma x5                   438 / 328 /   628   set 2 / 16             235
+
+Default: OPERATOR_NAMED 25.5%, ASSET_ONLY 23.2%, UNMAPPED 51.3%. Mapped
+cases 320 -> 679. Median candidate set stays 1 and p90 stays 4; median
+distinct parties stays 1; of 260 competing cases, 130 name exactly one party
+and 101 name two or more. So the thresholds did not dissolve the tiers.
+Across every assumed-sigma scenario the named share moves within
+23.6-29.3%; only the extraction p90 choice (33.3%) or a 5x plume sigma
+(31.4%, with p90 sets of 16) pushes further, and both loosen ambiguity.
+The honest figure is a quarter named, a quarter asset-only, half unmapped.
+
+Where the gain came from: 262 mapped cases now top on a VIIRS flare
+detection (sourced 750 m sigma), which is why ASSET_ONLY tripled; "Flare"
+sources went from 149 to 70 unmapped. Per country: United States 154 / 41 /
+50; Iran 35 / 45 / 46; Venezuela 21 / 55 / 20; Turkmenistan 8 / 16 / 190;
+Algeria 7 / 55 / 150; Uzbekistan 7 / 16 / 64. "Transmission Pipelines"
+improved only from 163 to 139 unmapped: the remaining pipeline cases sit
+where GEM has no traced route, not where the route is imprecise, so no
+per-class sigma reaches them. Runtime 44 s for nine scenarios, 5.8 GB peak.
+
+The data layer is frozen at this state. Two open items are recorded, not
+acted on: SEARCH_RADIUS_PIXELS and the pipeline/LNG/OGIM sigmas remain
+assumptions with sensitivity shown; and the extraction sigma may overstate
+point-only units because outlined units skew offshore.
+
+## 2026-09-15 — Costing (slice 5): observed durations, sourced constants, and one caught 1000x error
+backend/app/costing.py, pure functions, kg throughout, kg_to_tonnes the only
+exit. annualised_emission_kg(fluxrate_kg_per_h, duration_h) has NO default
+duration; the name is kept from the spec but the docstring says it is flux x
+duration with no per-year scaling.
+
+Duration is observed, per source, as first-to-last plume tile_date. Over the
+1,394 cases: 833 have a span (2+ detections, span > 0), 561 are single
+detections and get None (never zero), 65 have no reported flux on any plume.
+Span days p10 0.1, p25 22, p50 309, p75 762, p90 1,084, max 1,914; 126 spans
+are under one day. The costed subset is therefore 784 of 1,394 (355 of the
+679 mapped). Assumption stated on every printout: continuous emission at the
+mean detected rate between first and last detection. That is an UPPER-BOUND
+model: it overstates intermittent sources (MARS's own persistency field, the
+share of clear overpasses with a detection, is null for 1,167 sources and
+was not applied; it is the obvious refinement) and understates sources still
+emitting after their last detection.
+
+Constants, all in config with sources:
+- GWP-100 fossil methane 29.8 (+/- 11), IPCC AR6 WG1 Ch.7 Table 7.15,
+  machine-verified against the chapter PDF text; the non-fossil row is 27.0.
+- Methane HHV 890.8 kJ/mol (NIST WebBook) -> 55.53 MJ/kg; 1 Btu(IT) =
+  1055.05585262 J (NIST SP 811); density 0.6785 kg/m3 derived from IUPAC
+  molar mass and the exact SI gas constant at ISO 13443 conditions (15 C,
+  101.325 kPa), ideal gas, 0.2% real-gas effect ignored, display only.
+- Price: Henry Hub spot, monthly average, August 2026, 2.78 USD/MMBtu (EIA
+  series RNGWHHD, retrieved 2026-09-15). One benchmark, one month; 2026
+  monthly averages so far span 2.77-7.72, and every printout says so.
+- Unit guard: MARS's dictionary states typical detectable emissions of
+  500-10,000 kg/h; a flux column whose median is outside that band is
+  refused as a unit error (tonnes/h or g/h). Tested with the real column
+  scaled by 1/1000 and 1000.
+
+Results (costed subsets only; nothing mixes costed and uncosted sources):
+  all cases, 784 costed:     CH4 29.3 Mt   CO2e 874 Mt   gas 43.2 bcm   USD 4.29 bn
+  mapped, 355 costed:        CH4 15.5 Mt   CO2e 461 Mt   gas 22.8 bcm   USD 2.26 bn
+The first draft of the HHV derivation divided by 1000 twice and printed the
+value as 4.3 million USD; test_energy_content_hand_checked caught it before
+anything was reported. Recorded because it is the exact failure the project's
+unit rules exist for, and it happened.
+
+## 2026-09-15 — Duration cap (slice 5B): per-detection attributable window
+The uncapped first-to-last model credited a source seen twice five years
+apart with five years of emission; 29.3 Mt CH4 was not defensible. Each
+detection is now credited with one attributable window centred on it,
+overlapping windows merged, no double counting. Window = 11.1 days, MEASURED
+as the median gap between consecutive detections of the same source over all
+18,855 gaps in the snapshot (p25 3.0, p75 67.9 days); the choice of the
+median is the one modelling decision. The uncapped span is retained and
+labelled UPPER BOUND. A single detection is credited one window, so capped
+totals exist for every case with a flux; the ratio is reported on the same
+784 (all) / 355 (mapped) cases so it compares like with like.
+
+  all cases, 784 with 2+ detections:  capped 5.92 Mt CH4 / 176 Mt CO2e /
+    USD 866 M  vs  uncapped 29.3 Mt / 874 Mt / USD 4,291 M   ratio 0.202
+    capped over all 1,329 flux-bearing cases: 6.56 Mt / 196 Mt / USD 960 M
+  mapped, 355 with 2+ detections:     capped 3.30 Mt / 98 Mt / USD 483 M  vs
+    uncapped 15.5 Mt / 461 Mt / USD 2,264 M   ratio 0.214
+    capped over all 632 flux-bearing mapped cases: 3.63 Mt / 108 Mt / USD 531 M
+  Median attributed duration falls from 335 to 33 days.
+
+Per-case daily figures, which depend on no duration assumption and are what
+a UI should lead with: kg CH4 per day p50 52,416 (p90 220,603), USD per day
+p50 7,669 (p90 32,276), days since last detection to the snapshot date
+p10 44 / p50 236 / p90 533 (includes the 30-75 day publication lag).
+MARS persistency was not applied, by instruction.
+
+## 2026-09-17 — Web export (slice 6A): one JSON blob, built offline, gated on the hand-checked count
+etl/export_web.py runs the default attribution scenario and the costing once
+and writes web/data.json (392 KB) in exactly the shape the committed frontend
+reads: C (one entry per Natural Earth country, zero-case countries included
+so the map draws) and L (leaks keyed by the country's Natural Earth name).
+The field set was taken by grepping the frontend for every property it
+reads, not from the demo data: C n c r bb cs usd ch4 nm as um fmax; L id ty
+d nd f ch u lat lon sat t op cand. The demo's iso, co2 and co were never
+read and are not emitted. `fmax` (max kg/h in the country) is required for
+marker sizing and was missing from the written spec.
+
+The correctness gate is MARS_UNANSWERED_CASE_COUNT = 1,394 in config, cited
+to the 2026-09-15 count, checked twice (frame rows and sum of country
+counts) with an explicit raise rather than `assert`, so -O cannot strip it.
+
+Units: the frame is kg and kg/h throughout, built from `ch4_fluxrate` only;
+`total_emission` (tonnes) is never read. `--inspect` traces every derived
+column back to the kg/h rate (median 2,184 kg/h inside the MARS 500-10,000
+band; kg_per_day == flux x 24; usd_per_day recomputed) and raises on any
+break. The single tonne conversion is `ch` (t CH4/day) via kg_to_tonnes at
+the presentation boundary, hand-checked: 2,480 kg/h -> 59,520 kg/day ->
+59.5 t/day -> USD 8,708/day.
+
+Mapping choices:
+- d = days since LAST detection to the snapshot date (the frontend anchors
+  its timeline at snapshot minus d), not days since first detection.
+- ty = MARS source_type verbatim (25 values), no re-labelling.
+- sat = instrument only ("Sentinel-2 - ESA" -> "Sentinel-2"); agencies are
+  credited in the footer.
+- op = the top candidate's named party only when the tier is
+  OPERATOR_NAMED; GEM share brackets ("[100.00%]", "[unknown %]") are
+  stripped for display but every co-owner is kept, "; "-joined (28 of 356
+  named cases), so no party is hidden. cand = n_candidates.
+- The 65 cases with no reported flux keep f, ch, u = null. Zero would be an
+  invented number. Country usd/ch4 sums skip them. Known consequence, left
+  for the frontend slice: the page calls l.f.toLocaleString() in the
+  country leak list, so 15 country views (Russia 25, US 7, Kazakhstan 6...)
+  will throw until a null guard is agreed.
+- Country outlines: no Natural Earth file is on disk; the 175 thinned
+  ne_110m rings embedded in the committed demo were extracted verbatim to
+  data/raw/country_rings.json with a provenance block. Four MARS names
+  resolve through the existing MARS_TO_GEM_COUNTRY_ALIASES (Iran, Russia,
+  Syria, Vietnam); any other miss raises. Bahrain has no polygon at 1:110m
+  and is listed in COUNTRIES_WITHOUT_NE110M_POLYGON: empty rings, bbox from
+  its own leaks, reachable from the list.
+
+Result: 1,394 leaks in 31 countries; named 356 / asset 323 / unmapped 715,
+matching the frozen 4D run. Daily totals over the 1,329 cases with a flux:
+235,370 t CH4/day, USD 34.4 M/day (consistent with the slice-5B per-case
+figures; mean is far above the median because of a heavy tail, e.g.
+USA_S_1066 at 146,438 kg/h).
+
+.gitignore had its last two patterns joined on one line, so neither the
+parquet nor OGIM was ignored; fixed. web/data.json is committed: it is the
+runtime's only data input.
+
+## 2026-09-17 — Correction: a name is shown only when the candidate set names ONE party
+The first export put the top candidate's party on every OPERATOR_NAMED case.
+For 94 of the 356, the candidate set names two or more distinct parties on
+different assets (e.g. USA_S_1063: a pipeline owned by four companies at
+31 m, a Texaco well at 55 m). Picking the nearest there asserts what the
+geometry cannot support. Rule now: the frontend label `named` (and `op`)
+requires tier OPERATOR_NAMED AND n_parties < 2; otherwise the case is shown
+as `asset` with op null, so the pill under-claims rather than over-claims.
+Co-owners of a SINGLE asset are one party string and stay joined with GEM's
+"; " (16 cases): they are all genuinely owners. The attribution tier in the
+backend and in cases.json is unchanged; `shown_as` records the label.
+Shown split becomes named 262 / asset 417 / unmapped 715.
+The Operators tab aggregates by individual party (split on "; "), each
+owner credited with the whole leak, stated in the caveats; before, a joint
+venture would have appeared as a phantom operator with one leak.
+
+## 2026-09-17 — Frontend null guards for the 65 uncosted cases
+"Change nothing else" never meant crash. Every call site of f/ch/u
+(marker radius, timeline, stat tiles, narrative, record table, country
+list, operators footer, tooltip) is guarded; the 65 cases render "flux not
+reported" and a dash. Counts stay on 1,394; methane and money on 1,329; the
+split is stated in the caveats from the data (NL/NF), not hardcoded. Two
+further caveats added: daily figures are rates at detection and must not be
+multiplied out (the page never does; verified by grep), and co-owner
+listing. Headline moved from the demo's 99,550 t/day to 235,370 t/day; the
+mean 7,374 kg/h against a median of 2,184 is the expected super-emitter
+skew, and 34.4 M USD/day / 3.511 USD per (kg/h)-day = 9.8 M kg/h checks.
+
+## 2026-09-17 — Runtime service (slice 6B): serves two committed JSON files, computes nothing
+backend/app/main.py: fastapi + uvicorn, imports only config (a test scans
+for pandas/numpy/shapely/pyarrow/sqlite3 and the geospatial stack). Loads
+web/data.json (map blob, 0.39 MB) and web/cases.json (per-case detail,
+1.65 MB, fetched only by the drill-down) once at startup and refuses to
+start on a missing file, a wrong case count, or an id mismatch between the
+two. Endpoints: /healthz, /api/summary, /api/cases?country&tier,
+/api/cases/{id}, /api/geojson, /api/data, / (StaticFiles). `capped` and
+`upper_bound` are separate objects in /api/summary totals and in every
+case; nothing sums across them. Summary totals reproduce slice 5B exactly.
+No outbound call of any kind exists in the service.
+
+Observed while smoke-testing, not changed: for 24% of cases with both
+models (185 of 784), capped > "upper_bound". The capped model's windows
+overhang the first and last detection by half a window each, so for a
+densely detected source the merged union exceeds the true span by up to
+one window (11.1 days); the excess is bounded, never more. Among the 185
+the span is p50 2.1 days, max 97 (USA_S_1063: 5 detections in 3.1 h ->
+capped 269.5 h vs span 3.1 h). "Upper bound" is an upper bound on the
+continuous-emission assumption, not on the capped model. The UI should label the span model "first-to-last span" rather than
+imply it dominates; left for the frontend slice.
+
+## 2026-09-17 — Frontend boots from /api/data (Task 4); the page carries no data of its own
+web/index.html lost its inlined demo blob (`const DATA = {...}`, 397 KB on
+one line) and now starts with
+`const {C, L} = await (await fetch('/api/data')).json();`. The script tag
+became `<script type="module">` because a top-level await is legal only in a
+module; nothing else in the block changed. Checked before choosing that: the
+page has no inline `on*=` handlers and the script never uses `this`, so
+module scope and strict mode cannot break anything. The page went from 447
+KB to 50 KB and the served blob is the single source of truth, so the
+frontend can never disagree with the API. Verified by executing the served
+script in jsdom against the running service: no errors, 176 country
+outlines, 1,394 alerts, 235.4 kt/day and USD 34.4 M/day on the headline,
+Russia drill-down with 59 rows including an uncosted one rendering "flux
+not reported". A test pins the fetch line, the module tag, the absence of
+the demo blob and a 100 KB size ceiling. Consequence: the page requires the
+service; opening index.html from disk shows nothing, by design.
+
+## 2026-09-17 — Visible licence footer (Task 5)
+CC BY-NC-SA 4.0 asks for attribution that is reasonably visible; a Sources
+drawer two clicks deep is arguable, a footer is not. One line at the base
+of the sidebar names UNEP IMEO MARS with the snapshot date and licence, the
+30-75 day publication lag (so nobody reads the map as live), and Global
+Energy Monitor with CC BY 4.0, each linked to its source. The drawer keeps
+the full source list. A test pins the footer's content.
+
+## 2026-09-17 — web/standalone.html: the page that needs no server
+Because index.html now boots from /api/data, the demo and the live link
+both depend on the service being up. etl/export_web.py therefore also
+writes web/standalone.html: index.html with data.json inlined in place of
+the single boot line (WEB_BOOT_LINE in config), nothing else touched, so
+the UI is byte-identical. `python -m etl.export_web --standalone`
+regenerates it from the two committed files in 0.4 s without the database
+or the asset table; every full export rewrites it too, so the three files
+cannot drift, and a test asserts the committed standalone equals
+build_standalone(index.html, data.json) byte for byte. "</" inside the
+blob is written "<\/" so no data value can close the script tag; JS reads
+the string unchanged. The file is committed (440 KB), so it survives a
+failed deploy on any clone. Verified in jsdom: the served page and the
+standalone file opened from a file:// URL with fetch forbidden produce
+identical sidebar HTML, markers and footer at world, country and leak
+level. The video should be recorded against this file.
+
+## 2026-09-17 — The op rule, re-verified against the written data
+Raised again after Task 4. The rule from the earlier correction is in force
+in etl/export_web.py (web_tier, leak_record, detail_record) and in the
+committed data: 262 shown named, none with n_parties >= 2; 94
+OPERATOR_NAMED cases, USA_S_1063 among them, are shown as asset with op
+null; 16 named cases carry co-owners of a single asset joined with GEM's
+"; " (e.g. USA_S_225: Tallgrass Energy LP; Phillips 66, n_parties 1); no
+non-named case carries an op. n_parties counts distinct named-party
+strings across candidates, so a joint-venture string on one asset is one
+party, and the same string plus a different party on another asset is two
+and demotes the case. The Operators tab splits on "; " and credits each
+owner. The "28 of 356" figure in the slice-6A entry describes the state
+before that correction and is superseded by it.

@@ -12,6 +12,8 @@ from etl.export_web import (
     CaseCountError,
     CountryNameError,
     build_payload,
+    candidate_cards,
+    detection_rows,
     check_case_count,
     display_party,
     instrument_name,
@@ -43,6 +45,8 @@ def _row(**overrides) -> pd.Series:
         "days_since_first_detection": 240,
         "capped_duration_h": 266.4, "capped_ch4_kg": 660672.0, "capped_co2e_kg": 19688025.6, "capped_usd": 96660.685589,
         "upper_bound_duration_h": math.nan, "upper_bound_ch4_kg": math.nan, "upper_bound_co2e_kg": math.nan, "upper_bound_usd": math.nan,
+        "det": [["2026-01-18T18:11", "EMIT", 2480.0]],
+        "cands": [{"k": "gas_pipeline", "n": "Line A", "ds": "GEM-GGIT-Pipelines-2025-11", "p": "TC Energy Corp", "d": 31.1, "th": 60.8}],
     }
     base.update(overrides)
     return pd.Series(base)
@@ -185,7 +189,10 @@ def test_detail_record_refuses_a_mismatched_attribution() -> None:
 
 from pathlib import Path  # noqa: E402
 
-from backend.app.config import WEB_BOOT_LINE, WEB_DATA_PATH, WEB_DIR, WEB_STANDALONE_PATH  # noqa: E402
+from backend.app.config import (  # noqa: E402
+    MARS_PUBLICATION_LAG_DAYS_MAX, MARS_PUBLICATION_LAG_DAYS_MIN, MARS_SNAPSHOT_DATE,
+    WEB_BOOT_LINE, WEB_DATA_PATH, WEB_DIR, WEB_STANDALONE_PATH,
+)
 from etl.export_web import StandaloneError, build_standalone  # noqa: E402
 
 PAGE = '<script type="module">\n' + WEB_BOOT_LINE + '\nconst NL=Object.values(L).flat().length;\n</script>'
@@ -193,15 +200,15 @@ PAGE = '<script type="module">\n' + WEB_BOOT_LINE + '\nconst NL=Object.values(L)
 
 def test_build_standalone_replaces_only_the_boot_line() -> None:
     out = build_standalone(PAGE, '{"C":[],"L":{"Russia":[{"id":"RUS_S_001"}]}}')
-    assert out == ('<script type="module">\nconst {C, L} = {"C":[],"L":{"Russia":[{"id":"RUS_S_001"}]}};\n'
+    assert out == ('<script type="module">\nconst {C, L, M} = {"C":[],"L":{"Russia":[{"id":"RUS_S_001"}]}};\n'
                    'const NL=Object.values(L).flat().length;\n</script>')
     assert "fetch(" not in out
 
 
 def test_build_standalone_cannot_close_the_script_tag_and_keeps_the_value() -> None:
     out = build_standalone(PAGE, '{"C":[],"L":{"X":[{"op":"A </script> B"}]}}')
-    assert "</script> B" not in out.split("const {C, L} = ")[1].split("\nconst NL")[0]
-    assert '"A <\\/script> B"' in out  # JS reads "\/" as "/", so the party string is unchanged
+    assert "</script> B" not in out.split("const {C, L, M} = ")[1].split("\nconst NL")[0]
+    assert '"A <\\/script> B"' in out and "const {C, L, M} = " in out  # JS reads "\/" as "/", so the party string is unchanged
 
 
 def test_build_standalone_refuses_zero_or_two_boot_lines() -> None:
@@ -224,4 +231,82 @@ def test_index_carries_the_visible_licence_footer() -> None:
     footer = index.split('<footer class="lic">')[1].split("</footer>")[0]
     assert "UNEP IMEO" in footer and "CC BY-NC-SA 4.0" in footer
     assert "Global Energy Monitor" in footer and "CC BY 4.0" in footer
-    assert "15 September 2026" in footer and "30 to 75 days" in footer
+    assert MARS_SNAPSHOT_DATE.strftime("%-d %B %Y") in footer, "footer snapshot date must match config"
+    assert f"{MARS_PUBLICATION_LAG_DAYS_MIN} to {MARS_PUBLICATION_LAG_DAYS_MAX} days" in footer
+
+
+# --- real detection rows and candidate cards (no PRNG anywhere) --------------------
+
+import json  # noqa: E402
+
+
+def test_detection_rows_keep_time_order_instrument_and_null_rates() -> None:
+    plumes = pd.DataFrame({
+        "source_name": ["X", "X", "X", "Y"],
+        "tile_date": ["2026-01-21T20:32:00", "2026-01-21T17:25:29", "2026-01-21T18:52:00", "2025-03-01T00:00:00"],
+        "satellite": ["VIIRS - NASA/NOAA", "Sentinel-2 - ESA", "VIIRS - NASA/NOAA", "EMIT - NASA"],
+        "ch4_fluxrate": [math.nan, 76779.0, math.nan, 2480.0],
+    })
+    det = detection_rows(plumes)
+    assert det["X"] == [["2026-01-21T17:25", "Sentinel-2", 76779.0], ["2026-01-21T18:52", "VIIRS", None],
+                        ["2026-01-21T20:32", "VIIRS", None]]
+    assert det["Y"] == [["2025-03-01T00:00", "EMIT", 2480.0]]
+
+
+def test_candidate_cards_are_the_exported_values_in_order_and_capped() -> None:
+    result = _attribution("TC Energy Corp [100.00%]")
+    cards = candidate_cards(result)
+    assert cards == [{"k": "gas_pipeline", "n": "Test Pipe", "ds": "GEM-GGIT-Pipelines-2025-11", "p": "TC Energy Corp",
+                      "d": 31.1, "th": 116.6}]
+    assert candidate_cards(_attribution(None))[0]["p"] is None
+    result.candidates = result.candidates * 7
+    assert len(candidate_cards(result)) == 5 and len(candidate_cards(result, limit=2)) == 2
+
+
+def test_leak_record_carries_detections_and_cards_and_refuses_a_count_mismatch() -> None:
+    rec = leak_record(_row())
+    assert rec["det"] == [["2026-01-18T18:11", "EMIT", 2480.0]] and rec["cands"][0]["n"] == "Line A"
+    with pytest.raises(ValueError):
+        leak_record(_row(n_detections=2))
+    with pytest.raises(ValueError):
+        leak_record(_row(det=[], n_detections=0))
+
+
+def test_committed_blob_usa_s_1063_matches_the_plumes_table_and_cases_json() -> None:
+    """Hand-checked: five detections on 2026-01-21, one Sentinel-2 rate of
+    76,779 kg/h and four VIIRS rows with no rate; three candidates led by the
+    Whistler pipeline at 31.1 m within 60.8 m. The page renders these and nothing else."""
+    blob = json.loads(WEB_DATA_PATH.read_text(encoding="utf-8"))
+    leak = next(l for l in blob["L"]["United States of America"] if l["id"] == "USA_S_1063")
+    assert leak["det"] == [["2026-01-21T17:25", "Sentinel-2", 76779.0], ["2026-01-21T18:52", "VIIRS", None],
+                           ["2026-01-21T19:21", "VIIRS", None], ["2026-01-21T19:42", "VIIRS", None],
+                           ["2026-01-21T20:32", "VIIRS", None]]
+    assert leak["nd"] == 5 and leak["f"] == 76779 and leak["t"] == "asset" and leak["op"] is None
+    assert [c["k"] for c in leak["cands"]] == ["gas_pipeline", "well", "flare_detection"]
+    assert leak["cands"][0] == {"k": "gas_pipeline", "n": "Whistler Pipeline | Midland Lateral", "ds": "GEM-GGIT-Pipelines-2025-11",
+                                "p": "First Infrastructure Capital Advisors LLC; MPLX LP; Stonepeak Partners LP; West Texas Gas Inc",
+                                "d": 31.1, "th": 60.8}
+    assert leak["cands"][2]["p"] is None and leak["cands"][2]["d"] == 458.2 and leak["cands"][2]["th"] == 752.4
+    detail = json.loads((WEB_DIR / "cases.json").read_text(encoding="utf-8"))["cases"]["USA_S_1063"]["attribution"]
+    assert [(c["kind"], c["distance_m"], c["threshold_m"]) for c in detail["candidates"]] == \
+           [(c["k"], c["d"], c["th"]) for c in leak["cands"]]
+    for country in blob["L"].values():
+        for l in country:
+            assert len(l["det"]) == l["nd"] > 0 and len(l["cands"]) == min(l["cand"], 5)
+
+
+def test_leak_record_duration_blocks_are_tonnes_and_null_where_unobserved() -> None:
+    """capped 660,672 kg over 266.4 h -> 660.7 t; the span is null for a single detection."""
+    rec = leak_record(_row())
+    assert rec["cap"] == {"h": 266.4, "t": 660.7} and rec["ub"] is None
+    both = leak_record(_row(upper_bound_duration_h=3.1, upper_bound_ch4_kg=238676.0))
+    assert both["ub"] == {"h": 3.1, "t": 238.7}
+    assert leak_record(_row(capped_duration_h=math.nan, capped_ch4_kg=math.nan))["cap"] is None
+
+
+def test_committed_blob_meta_comes_from_config() -> None:
+    from backend.app.config import DETECTION_ATTRIBUTABLE_WINDOW_DAYS
+    blob = json.loads(WEB_DATA_PATH.read_text(encoding="utf-8"))
+    assert blob["M"] == {"window_days": DETECTION_ATTRIBUTABLE_WINDOW_DAYS, "snapshot": MARS_SNAPSHOT_DATE.isoformat()}
+    leak = next(l for l in blob["L"]["United States of America"] if l["id"] == "USA_S_1063")
+    assert leak["cap"] == {"h": 269.5, "t": 20692.6} and leak["ub"] == {"h": 3.1, "t": 238.7}

@@ -665,7 +665,13 @@ WEB_CASES_DETAIL_PATH: Final[Path] = WEB_DIR / "cases.json"
 `upper_bound` as SEPARATE objects, and the full candidate set. Produced by
 the export alongside data.json; the runtime cannot recompute either."""
 
-WEB_BOOT_LINE: Final[str] = "const {C, L} = await (await fetch('/api/data')).json();"
+WEB_CANDIDATE_CARDS: Final[int] = 5
+"""Candidates carried per leak in web/data.json, in the attribution's own
+order. The 4D run's candidate-set p90 is 3 (DECISIONS 2026-09-15), so five
+cards show the complete set for over nine cases in ten; the page states the
+count of any not shown. Never a fabricated card: only exported values."""
+
+WEB_BOOT_LINE: Final[str] = "const {C, L, M} = await (await fetch('/api/data')).json();"
 """The one line of web/index.html that loads data. The page holds no data of
 its own; the standalone build replaces exactly this line with the blob."""
 

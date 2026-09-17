@@ -140,7 +140,7 @@ button{font-family:inherit;font-size:inherit;cursor:pointer}
 .p-asset{color:var(--asset);background:color-mix(in srgb,var(--asset) 13%,transparent)}
 .p-unmapped{color:var(--unmapped);background:color-mix(in srgb,var(--unmapped) 13%,transparent)}
 
-.rep{flex:1;min-height:0;padding:16px}
+.rep{flex:1;padding:16px}
 .rep h3{margin:0;font-size:21px;font-weight:680;letter-spacing:-.03em}
 .rep .rsub{color:var(--ink2);font-size:13px;margin:3px 0 0}
 .big{display:grid;grid-template-columns:1fr 1fr;gap:1px;background:var(--line);
@@ -175,9 +175,6 @@ dl.kv dd{margin:0;text-align:right;font-weight:500}
 .plain b{font-weight:650}
 ul.cav{margin:0;padding-left:16px;font-size:12.5px;color:var(--ink2)}
 ul.cav li{margin-bottom:7px}
-.cta{width:100%;margin-top:16px;padding:10px;background:var(--ink);color:var(--panel);
-  border:0;border-radius:7px;font-weight:620;font-size:13.5px}
-.cta+p{font-size:11.5px;color:var(--ink3);margin:8px 0 0;text-align:center}
 
 .stage svg{position:absolute;inset:0;width:100%;height:100%;display:block}
 #cam{transition:transform .62s cubic-bezier(.4,.05,.2,1)}
@@ -402,7 +399,7 @@ dl.gloss dd{margin:2px 0 0;color:var(--ink2);line-height:1.55}
 </aside>
 
 <script type="module">
-const {C, L} = await (await fetch('/api/data')).json();
+const {C, L, M} = await (await fetch('/api/data')).json();
 
 /* ── verified constants ─────────────────────────────────── */
 const GWP  = {100:29.8, 20:82.5};   // IPCC AR6 WG1 Table 7.15, fossil methane
@@ -588,47 +585,31 @@ function render(){
     const l=S.leak,t=TIER[l.t];
     head.innerHTML=`<h2>${S.ctry.n}</h2><div class="sub">${S.ctry.cs} unanswered alerts</div>`;
     list.hidden=true;rep.hidden=false;
-    let h=0;for(const ch of l.id)h=(h*31+ch.charCodeAt(0))&0xffff;
-    const rn=()=>{h=(h*1103515245+12345)&0x7fffffff;return h/0x7fffffff;};
-    const end=new Date(2026,8,15);end.setDate(end.getDate()-l.d);
-    const ds=[];let cur=new Date(end);
-    for(let i=0;i<l.nd;i++){ds.unshift(new Date(cur));
-      cur.setDate(cur.getDate()-Math.round(8+rn()*160));}
+    /* every value below is an exported field: l.det from the plumes table, l.cands from the attribution */
     let rows='';
-    ds.forEach((d,i)=>{
-      if(i>0){const g=Math.round((d-ds[i-1])/864e5);
+    l.det.forEach(([ts,inst,rate],i)=>{
+      if(i>0){const g=Math.round((new Date(ts)-new Date(l.det[i-1][0]))/864e5);
         if(g>40)rows+=`<div class="det gap"><span>${g} days with no detection</span></div>`;}
-      rows+=`<div class="det"><span>${d.toISOString().slice(0,10)}</span><span>${
-        hasF(l)?Math.round(l.f*(0.82+rn()*0.36)).toLocaleString()+' kg/h':NOFLUX}</span></div>`;});
+      rows+=`<div class="det"><span>${ts.slice(0,10)} ${ts.slice(11)}</span><span style="color:var(--ink3)">${inst}</span><span>${
+        rate!=null?rate.toLocaleString()+' kg/h':'rate not reported'}</span></div>`;});
 
-    const sig=l.t==='named'?3340:l.t==='asset'?753:null;
+    const kindLabel=k=>k.replace(/_/g,' ').replace(/^./,c=>c.toUpperCase());
     let cands='';
-    if(l.t==='named'&&l.op){
-      const d1=Math.round(rn()*sig*0.35),d2=Math.round(sig*(0.4+rn()*0.45));
-      cands=`<div class="cand"><div class="cn">${l.op.replace(/ (Co\.|Ltd\.|Corp\.|LLC|Partners|Holdings|Energy|Production Co\.)$/,'')} — production unit</div>
-        <div class="cs2">Extraction unit, Global Energy Monitor</div>
-        <div class="cp">Parent company <b>${l.op}</b></div>
-        <div class="gg"><div class="gl"><span>${d1.toLocaleString()} m away</span><span>matched within ${sig.toLocaleString()} m</span></div>
-        <div class="gt"><div class="gf" style="width:${(d1/sig*100).toFixed(0)}%"></div></div></div></div>`;
-      if(l.cand>1)cands+=`<div class="cand"><div class="cn">${l.cand-1} further unit${l.cand>2?'s':''} of the same parent</div>
-        <div class="cs2">Extraction units, Global Energy Monitor</div>
-        <div class="cp">Parent company <b>${l.op}</b></div>
-        <div class="gg"><div class="gl"><span>${d2.toLocaleString()} m away</span><span>matched within ${sig.toLocaleString()} m</span></div>
-        <div class="gt"><div class="gf" style="width:${(d2/sig*100).toFixed(0)}%"></div></div></div></div>`;
-    } else if(l.t==='asset'){
-      const d1=Math.round(rn()*sig*0.8);
-      cands=`<div class="cand"><div class="cn">Flare, night-time infrared detection</div>
-        <div class="cs2">NOAA VIIRS via OGIM v2.7</div>
-        <div class="cp" style="color:var(--ink3)">No owner recorded in any public dataset</div>
-        <div class="gg"><div class="gl"><span>${d1.toLocaleString()} m away</span><span>matched within ${sig.toLocaleString()} m</span></div>
-        <div class="gt"><div class="gf" style="width:${(d1/sig*100).toFixed(0)}%"></div></div></div></div>`;
+    if(l.cands.length){
+      cands=l.cands.map(c=>`<div class="cand"><div class="cn">${c.n||kindLabel(c.k)}</div>
+        <div class="cs2">${kindLabel(c.k)}, ${c.ds}</div>
+        <div class="cp"${c.p?'':' style="color:var(--ink3)"'}>${c.p?`Recorded party <b>${c.p}</b>`:'No owner recorded in this dataset'}</div>
+        <div class="gg"><div class="gl"><span>${c.d.toLocaleString()} m away</span><span>${c.th!=null?'matched within '+c.th.toLocaleString()+' m':'threshold not recorded'}</span></div>
+        <div class="gt"><div class="gf" style="width:${c.th?Math.min(100,c.d/c.th*100).toFixed(0):0}%"></div></div></div></div>`).join('');
+      const more=l.cand-l.cands.length;
+      if(more>0)cands+=`<div class="cand"><div class="cs2">${more} further candidate${more>1?'s':''} within range, not shown</div></div>`;
     } else {
       cands=`<div class="cand"><div class="cn" style="color:var(--unmapped)">No asset within range</div>
         <div class="cs2">Searched Global Energy Monitor, OGIM v2.7 and VIIRS flare detections</div>
         <div class="cp" style="color:var(--ink2)">${hasF(l)?`Methane is escaping here at ${l.f.toLocaleString()} kg/h`:'Methane was detected here, with no rate reported,'}
         and no public dataset records what is at this location.</div></div>`;
     }
-    const yrs=(l.d/365);
+    const fmtDur=h=>h>=48?Math.round(h/24)+' days':h.toFixed(1)+' hours';
     rep.innerHTML=`
       <h3>${l.id}</h3>
       <p class="rsub">${l.ty} in ${S.ctry.n}</p>
@@ -640,13 +621,16 @@ function render(){
         <div><b style="color:var(--unmapped)">${hasF(l)?fmtU(l.u):'—'}</b><i>gas wasted per day</i></div>
       </div>
       ${horizon()}
-      ${hasF(l)?`      <div class="plain">At <b>${l.f.toLocaleString()} kg an hour</b>, this one leak puts
+      ${hasF(l)&&l.cap?`      <div class="plain">At <b>${l.f.toLocaleString()} kg an hour</b>, this one leak puts
       <b>${fmtT(co2e(l.ch))} of CO₂-equivalent</b> into the atmosphere every day on the
-      ${HZ}-year basis. Nobody has replied about it for <b>${l.d} days</b>, so if it has
-      been running that whole time it has caused roughly
-      <b>${fmtT(co2e(l.ch)*l.d)}</b> of warming — the same as
-      <b>${fmtN(cars(l.ch)*l.d)} cars</b> driven for a year${
-        yrs>1?`, and it has wasted enough gas to supply ${fmtN(homes(l.ch)*l.d)} homes for a day`:''}.
+      ${HZ}-year basis. Crediting each of its ${l.nd} detection${l.nd>1?'s':''} with a ${M.window_days}-day
+      window, the measured typical gap between sightings, it accounts for about
+      <b>${fmtT(l.cap.t)} of methane</b> over ${fmtDur(l.cap.h)}: <b>${fmtT(co2e(l.cap.t))} of CO₂-equivalent</b>,
+      the same as <b>${fmtN(cars(l.cap.t))} cars</b> driven for a year.${
+        l.ub&&l.ub.t>l.cap.t?` Had it run continuously from its first to its last detection
+      (${fmtDur(l.ub.h)}) the total would be ${fmtT(co2e(l.ub.t))} of CO₂-equivalent — an upper bound resting
+      on an assumption the data does not support.`:''}
+      Nobody has replied about it for <b>${l.d} days</b>.
       ${I('s-warming')}</div>`:`<div class="plain">MARS reported no emission rate for any detection of this source, so no methane,
       warming or gas figure can be given for it. It is still an unanswered alert: nobody has replied
       for <b>${l.d} days</b>.</div>`}
@@ -659,15 +643,12 @@ function render(){
           <dt>Government replied</dt><dd style="color:var(--unmapped)">No</dd>
           <dt>Operator replied</dt><dd style="color:var(--unmapped)">No</dd>
         </dl></div>
-      <div class="sec"><h4>Who might be responsible</h4>${cands}
-        ${l.t==='named'&&l.cand>1?`<div class="warn"><b>Uncertain which asset, certain whose.</b>
-        All ${l.cand} candidates belong to one parent, so the company is clear even though
-        the exact vent is not.</div>`:''}</div>
+      <div class="sec"><h4>Who might be responsible</h4>${cands}</div>
       <div class="sec"><h4>When it was seen</h4>${rows}</div>
       <div class="sec"><h4>Before you quote any of this</h4>
         <ul class="cav">
           <li>Attribution is a probability, not a finding. Each candidate shows its distance and the tolerance it was matched within.</li>
-          <li>The cumulative figure above assumes the leak ran continuously between sightings. Satellites see it only on clear passes, so treat it as an upper bound.</li>
+          <li>The cumulative figure credits each detection with a ${M.window_days}-day window, the measured median gap between sightings. A rate seen on one satellite pass is not a total, so no daily figure here is multiplied by days of silence.</li>
           <li>Health effects of methane are regional and cannot be attributed to a single leak. See the impact panel for what can and cannot be said.</li>
           <li>Gas valued at Henry Hub, August 2026, $2.78 per million Btu — a US benchmark. Not all escaping gas could be captured and sold.</li>
           <li>UNEP publishes 30 to 75 days after detection, so days silent includes that wait. A recorded reply means someone answered, not that the leak was fixed.</li>
@@ -675,8 +656,7 @@ function render(){
           <li>Every daily figure is the rate at the time of detection, as if every leak ran at once. It is not a yearly total and must not be multiplied out.</li>
           <li>Where one asset has several recorded owners, each is listed in the Operators tab with the whole leak; nothing is split by share.</li>
         </ul></div>
-      <button class="cta">Build the evidence pack</button>
-      <p>One page a regulator can send. Sending is a human decision — this tool never contacts anyone.</p>`;
+      `;
     fly([l.lon-1.1,l.lat-.8,l.lon+1.1,l.lat+.8],.1);
     drawMarks(S.ctry,l.id);legend(3);return;
   }

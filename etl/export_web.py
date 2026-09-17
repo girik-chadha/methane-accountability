@@ -51,6 +51,7 @@ from backend.app.config import (  # noqa: E402
     DETECTION_ATTRIBUTABLE_WINDOW_DAYS,
     FEEDBACK_NO,
     MARS_DB_PATH,
+    PLUMES_TABLE,
     MARS_SNAPSHOT_DATE,
     MARS_TO_GEM_COUNTRY_ALIASES,
     MARS_TYPICAL_DETECTABLE_FLUX_KG_PER_H,
@@ -63,6 +64,7 @@ from backend.app.config import (  # noqa: E402
     TIER_UNMAPPED,
     WEB_CASES_DETAIL_PATH,
     WEB_BOOT_LINE,
+    WEB_CANDIDATE_CARDS,
     WEB_DATA_PATH,
     WEB_DIR,
     WEB_STANDALONE_PATH,
@@ -126,7 +128,51 @@ def _attribution_row(result: Attribution) -> dict[str, object]:
         "top_asset_name": asset.name if asset else None,
         "top_source_dataset": asset.source_dataset if asset else None,
         "top_distance_m": top.distance_m if top else math.nan,
+        "cands": candidate_cards(result),
     }
+
+
+def candidate_cards(result: Attribution, limit: int = WEB_CANDIDATE_CARDS) -> list[dict[str, object]]:
+    """The first `limit` candidates in the attribution's own order, as the
+    frontend cards: k kind, n name, ds dataset, p named party (display form,
+    None when the dataset names nobody), d distance m, th match threshold m.
+    Every value is exported; the page invents nothing."""
+    return [
+        {
+            "k": c.asset.asset_kind,
+            "n": c.asset.name,
+            "ds": c.asset.source_dataset,
+            "p": display_party(c.asset.named_party),
+            "d": _number(c.distance_m, 1),
+            "th": _number(c.threshold_m, 1),
+        }
+        for c in result.candidates[:limit]
+    ]
+
+
+def load_detection_rows(db_path: Path = MARS_DB_PATH) -> pd.DataFrame:
+    """Every plume of every unanswered source: tile_date, satellite, and the
+    kg/h rate (null where MARS reported none, e.g. VIIRS rows)."""
+    with sqlite3.connect(db_path) as connection:
+        return pd.read_sql(
+            f"SELECT p.source_name, p.tile_date, p.satellite, p.ch4_fluxrate FROM {PLUMES_TABLE} p "
+            f"JOIN {SOURCES_TABLE} s ON p.source_name = s.source_name "
+            "WHERE s.feedback_government = ? AND s.feedback_operator = ? ORDER BY p.source_name, p.tile_date",
+            connection, params=(FEEDBACK_NO, FEEDBACK_NO),
+        )
+
+
+def detection_rows(plumes: pd.DataFrame) -> pd.Series:
+    """source_name -> [[time to the minute, instrument, kg/h or None], ...] in
+    time order. A missing rate is None, never zero, never filled in."""
+    frame = plumes.assign(detected_at=pd.to_datetime(plumes["tile_date"])).sort_values(["source_name", "detected_at"])
+    return (
+        frame.groupby("source_name")
+        .apply(lambda g: [[t.strftime("%Y-%m-%dT%H:%M"), instrument_name(sat), _number(rate)]
+                          for t, sat, rate in zip(g["detected_at"], g["satellite"], g["ch4_fluxrate"])],
+               include_groups=False)
+        .rename("det")
+    )
 
 
 def _cost_row(cost: CaseCost, first_detection: pd.Timestamp, last_detection: pd.Timestamp) -> dict[str, object]:
@@ -178,10 +224,13 @@ def build_cases_frame() -> tuple[pd.DataFrame, list[Attribution]]:
         _cost_row(c, span.loc[c.source_name, "min"], span.loc[c.source_name, "max"]) for c in costs
     ])
 
+    detections = detection_rows(load_detection_rows())
+
     frame = (
         sources[["source_name", "lat", "lon"]]
         .merge(state, on="source_name", how="left", validate="one_to_one")
         .merge(satellites, on="source_name", how="left", validate="one_to_one")
+        .merge(detections, on="source_name", how="left", validate="one_to_one")
         .merge(attribution, on="source_name", how="left", validate="one_to_one")
         .merge(costing, on="source_name", how="left", validate="one_to_one")
     )
@@ -280,7 +329,32 @@ def leak_record(row: pd.Series) -> dict[str, object]:
         "t": web_tier(row["tier"], int(row["n_parties"])),
         "op": display_party(row["top_named_party"]) if web_tier(row["tier"], int(row["n_parties"])) == WEB_TIER_LABELS[TIER_OPERATOR_NAMED] else None,
         "cand": int(row["n_candidates"]),
+        "det": _checked_detections(row),
+        "cands": list(row["cands"]),
+        "cap": _duration_block(row, "capped"),
+        "ub": _duration_block(row, "upper_bound"),
     }
+
+
+def _duration_block(row: pd.Series, prefix: str) -> dict[str, float] | None:
+    """{h: hours credited, t: TONNES CH4 over those hours} for one costing
+    model, or None where the model gives nothing (no flux; or a single
+    detection for the first-to-last span). Tonnes only at this boundary."""
+    hours, kg = row[f"{prefix}_duration_h"], row[f"{prefix}_ch4_kg"]
+    if pd.isna(hours) or pd.isna(kg):
+        return None
+    return {"h": _number(hours, 1), "t": _number(kg_to_tonnes(kg), TONNES_DECIMALS)}
+
+
+def _checked_detections(row: pd.Series) -> list[list[object]]:
+    """The exported detection rows must be exactly the counted detections;
+    a mismatch means the plumes query and the costing disagree, so raise."""
+    det = list(row["det"])
+    if len(det) != int(row["n_detections"]):
+        raise ValueError(f"{row['source_name']}: {len(det)} detection rows but n_detections={row['n_detections']}")
+    if not det:
+        raise ValueError(f"{row['source_name']} has no detection rows")
+    return det
 
 
 def build_payload(frame: pd.DataFrame, rings: list[dict]) -> dict[str, object]:
@@ -326,7 +400,13 @@ def build_payload(frame: pd.DataFrame, rings: list[dict]) -> dict[str, object]:
     check_case_count(total)
     if sum(len(v) for v in leaks.values()) != total:
         raise ValueError("leak records and country case counts disagree")
-    return {"C": countries, "L": leaks}
+    return {"C": countries, "L": leaks, "M": blob_meta()}
+
+
+def blob_meta() -> dict[str, object]:
+    """Constants the page states next to its numbers, from config, never
+    typed into the script: the attributable window and the snapshot date."""
+    return {"window_days": DETECTION_ATTRIBUTABLE_WINDOW_DAYS, "snapshot": MARS_SNAPSHOT_DATE.isoformat()}
 
 
 def write_json(payload: dict[str, object], path: Path) -> int:
@@ -355,7 +435,8 @@ def build_standalone(index_html: str, payload_text: str) -> str:
     n = index_html.count(WEB_BOOT_LINE)
     if n != 1:
         raise StandaloneError(f"expected exactly one boot line in index.html, found {n}")
-    inlined = "const {C, L} = " + payload_text.replace("</", "<\\/") + ";"
+    declaration = WEB_BOOT_LINE.split(" = await ")[0]  # "const {C, L, M}", from the same constant
+    inlined = declaration + " = " + payload_text.replace("</", "<\\/") + ";"
     return index_html.replace(WEB_BOOT_LINE, inlined)
 
 

@@ -56,6 +56,7 @@ def site(tmp_path: Path) -> tuple[Path, Path, Path]:
             "Russia": [_leak("RUS_S_001", "named", 2480, "A"), _leak("RUS_S_002", "unmapped", None, None)],
             "Bahrain": [_leak("BHR_S_001", "asset", None, None)],
         },
+        "M": {"window_days": 11.1, "snapshot": "2026-09-15"},
     }
     detail = {"models": {"capped": "capped model", "upper_bound": "upper bound model"},
               "cases": {"RUS_S_001": _detail("RUS_S_001", CAPPED, UPPER),
@@ -123,7 +124,7 @@ def test_geojson_is_one_point_per_case(client: TestClient) -> None:
 
 def test_data_and_index_are_served(client: TestClient) -> None:
     d = client.get("/api/data").json()
-    assert set(d) == {"C", "L"} and len(d["C"]) == 3
+    assert set(d) == {"C", "L", "M"} and len(d["C"]) == 3
     r = client.get("/")
     assert r.status_code == 200 and "ok" in r.text
 

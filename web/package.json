@@ -1,0 +1,7 @@
+{
+  "name": "methane-accountability-web",
+  "private": true,
+  "description": "Static frontend. jsdom is a dev dependency for the rendered-report pin test only; the page itself has no dependencies.",
+  "scripts": { "test": "node tests/report.test.mjs" },
+  "devDependencies": { "jsdom": "^26.0.0" }
+}

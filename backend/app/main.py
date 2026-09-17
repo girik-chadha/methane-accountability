@@ -134,7 +134,7 @@ def create_app(
 ) -> FastAPI:
     blob = load_json(data_path)
     detail = load_json(detail_path)
-    if set(blob) != {"C", "L"} or set(detail) != {"models", "cases"}:
+    if set(blob) != {"C", "L", "M"} or set(detail) != {"models", "cases"}:
         raise DataError("web blobs do not have the expected top-level keys")
     leaks = _leak_index(blob)
     if len(leaks) != expected_cases:

@@ -802,3 +802,72 @@ party, and the same string plus a different party on another asset is two
 and demotes the case. The Operators tab splits on "; " and credits each
 owner. The "28 of 356" figure in the slice-6A entry describes the state
 before that correction and is superseded by it.
+
+## 2026-09-17 — The leak report fabricated its evidence; replaced with exported fields only
+Found on review of USA_S_1063. The committed demo page generated the leak
+report's detection dates, per-detection rates, candidate names, distances
+and match tolerances from a PRNG seeded with the case id (h/rn()), with
+every asset-tier case drawn as a VIIRS flare "matched within 753 m" and
+every named case as a GEM "production unit" within 3,340 m. For
+USA_S_1063 the real record is five detections on 2026-01-21 within three
+hours, one Sentinel-2 rate of 76,779 kg/h and four VIIRS rows with no
+rate, and three candidates led by the Whistler Pipeline Midland Lateral
+at 31.1 m within 60.8 m; the page showed five dates spread over 14
+months with invented gaps and rates, and one flare card at 180 m. Across
+the data, 155 of 417 asset-shown cases do not top on a flare, 134 of 262
+named-shown cases top on a pipeline or a well, and the "all candidates
+belong to one parent" warning was false for 48 of the 93 cases it
+appeared on.
+
+Fix, route one: web/data.json now carries per leak `det` (every plume:
+time to the minute, instrument, kg/h or null, from the plumes table, in
+time order) and `cands` (the first WEB_CANDIDATE_CARDS = 5 candidates in
+the attribution's own order: kind, name, dataset, party, distance,
+threshold). The blob is 0.86 MB, under the 1 MB target. The export
+refuses a case whose detection rows do not equal its counted detections.
+The page deletes the generator, the hardcoded tolerances, the synthetic
+gaps, the "further units of the same parent" card, the one-parent warning
+and the hardcoded snapshot date; a missing rate prints "rate not
+reported", a gap row appears only where consecutive real dates are more
+than 40 days apart (the demo's existing display threshold, unchanged),
+each card shows its own threshold, and a count of candidates beyond the
+five is stated. The footer's snapshot date is pinned to config by test.
+Pinned three ways: the export test checks USA_S_1063's blob record
+against the hand-checked plume rows and cases.json; web/tests/
+report.test.mjs renders the standalone page in jsdom and checks every
+rendered row and card against the blob, and asserts no PRNG exists in
+the page; backend/tests/test_report_render.py runs it (jsdom is a dev
+dependency in web/package.json; node_modules is ignored).
+
+## 2026-09-17 — Footer overlap: .rep could shrink below its content
+.rep was `flex:1; min-height:0` inside the sidebar's flex column, so it
+shrank to the sidebar's height and its text overflowed visibly; the
+footer, the next flex item, sat at the bottom of the shrunken box, mid-
+report, with the report painting through it. Only the leak level
+overlapped because the lists are flex-shrink:0. Removing `min-height:0`
+lets .rep size to its content. Measured in headless Chromium (Playwright,
+1400x900) on the standalone file: at world, country (United States) and
+leak (USA_S_1063) level the footer's top equals the lowest painted bottom
+of the content (1054, 20480 and 2279 px), no overlap, no page errors.
+
+## 2026-09-17 — The narrative multiplied the rate by days of silence; now the capped model leads
+The report's paragraph computed rate x days since last detection ("13.01
+Mt of warming" for USA_S_1063, whose five detections span three hours):
+the annualisation error already ruled out for the headline, at case
+level, and a caveat below did not rescue a bold number above. Each leak
+record now carries `cap` {h, t}: the capped model's hours and TONNES CH4
+(the 11.1-day attributable window per detection, slice 5B), converted at
+the export boundary, and `ub` {h, t} for the first-to-last span, null for
+a single detection. The paragraph leads with the capped figure (USA_S_1063:
+20.7 kt CH4 over 11 days, 616.6 kt CO2e at GWP-100) and the toggle still
+applies the horizon on the page. The span figure appears only when it
+exceeds the capped one, labelled an upper bound on an assumption the data
+does not support; where the span is shorter than one window (24% of
+two-model cases, slice 6B) it adds nothing and is not shown. The window
+length and snapshot date reach the page as blob key `M` from config, never
+typed into the script. The caveat now states that no daily figure is
+multiplied by days of silence. Pinned in web/tests/report.test.mjs.
+
+## 2026-09-17 — "Build the evidence pack" removed
+The button had no handler. A dead control in a demo invites the question;
+the dossier route stays in the build order for after submission.
